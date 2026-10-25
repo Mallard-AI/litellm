@@ -3,7 +3,7 @@ use std::{sync::Arc, time::SystemTime};
 use fancy_regex::Regex;
 use thiserror::Error;
 
-use crate::{AccessRequest, McpAction, UiAction};
+use crate::AccessRequest;
 
 const ALL_PROXY_MODELS: &str = "all-proxy-models";
 const ALL_TEAM_MODELS: &str = "all-team-models";
@@ -296,10 +296,10 @@ impl KeyPolicy {
                 if !key_models.allows(name) {
                     return Err(Denial::KeyModelDenied);
                 }
-                if let Some(team) = &self.team {
-                    if !team.allows(name) {
-                        return Err(Denial::TeamModelDenied);
-                    }
+                if let Some(team) = &self.team
+                    && !team.allows(name)
+                {
+                    return Err(Denial::TeamModelDenied);
                 }
                 if self
                     .user_models
@@ -359,6 +359,8 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     use rstest::{fixture, rstest};
+
+    use crate::{McpAction, UiAction};
 
     use super::*;
 
