@@ -23,9 +23,7 @@ pub use identity::{
     AuthenticatedCaller, Authentication, AuthenticationMethod, Principal, PrincipalKind,
     ResolvedIdentity, SharedCaller, VerifiedIdentity,
 };
-pub use policy::{
-    Denial, KeyPolicy, ModelScope, PolicyConstructionError, RouteScope, TeamPolicy,
-};
+pub use policy::{Denial, KeyPolicy, ModelScope, PolicyConstructionError, RouteScope, TeamPolicy};
 pub use ui::{UI_CSRF_KEY, UiAuthSession, UiBackend, UiCredentials, UiSession, UiUser};
 
 pub fn hash_token(token: &str) -> String {
