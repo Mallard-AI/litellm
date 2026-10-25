@@ -78,6 +78,9 @@ impl ModelScope {
         Ok(Self(ModelScopeKind::Patterns(patterns.into())))
     }
 
+    /// Builds a model scope from caller-resolved model names and access groups.
+    ///
+    /// The caller must resolve provider aliases and access groups before construction. This helper does not provide full runtime resolver parity.
     pub fn expanded<I, S>(models: I) -> Result<Self, PolicyConstructionError>
     where
         I: IntoIterator<Item = S>,
@@ -153,7 +156,11 @@ impl TeamPolicy {
     }
 
     fn allows(&self, model: &str) -> bool {
-        self.models.allows(model) || self.aliases.iter().any(|alias| alias == model)
+        self.models.allows(model) || self.allows_alias(model)
+    }
+
+    fn allows_alias(&self, model: &str) -> bool {
+        self.aliases.iter().any(|alias| alias == model)
     }
 }
 
@@ -166,6 +173,9 @@ enum RoutePattern {
 impl RoutePattern {
     fn new(pattern: String) -> Result<Self, PolicyConstructionError> {
         if pattern.is_empty() || pattern.contains('{') || pattern.contains('}') {
+            return Err(PolicyConstructionError::UnsupportedRoutePattern(pattern));
+        }
+        if pattern != "*" && !pattern.starts_with('/') {
             return Err(PolicyConstructionError::UnsupportedRoutePattern(pattern));
         }
         if let Some(prefix) = pattern.strip_suffix('*') {
@@ -187,11 +197,18 @@ impl RoutePattern {
 }
 
 #[derive(Clone, Debug)]
-pub struct RouteScope(Arc<[RoutePattern]>);
+enum RouteScopeKind {
+    Unrestricted,
+    ExpandedEmpty,
+    Patterns(Arc<[RoutePattern]>),
+}
+
+#[derive(Clone, Debug)]
+pub struct RouteScope(RouteScopeKind);
 
 impl RouteScope {
     pub fn unrestricted() -> Self {
-        Self(Arc::default())
+        Self(RouteScopeKind::Unrestricted)
     }
 
     pub fn allowed<I, S>(routes: I) -> Result<Self, PolicyConstructionError>
@@ -203,11 +220,40 @@ impl RouteScope {
             .into_iter()
             .map(|route| RoutePattern::new(route.into()))
             .collect();
-        Ok(Self(routes?.into()))
+        let routes = routes?;
+        if routes.is_empty() {
+            return Ok(Self::unrestricted());
+        }
+        Ok(Self(RouteScopeKind::Patterns(routes.into())))
+    }
+
+    /// Builds a route scope from caller-expanded named route groups.
+    ///
+    /// The caller must resolve named route groups before construction. This helper does not provide full runtime resolver parity.
+    pub fn expanded<I, S>(routes: I) -> Result<Self, PolicyConstructionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let routes: Result<Vec<RoutePattern>, PolicyConstructionError> = routes
+            .into_iter()
+            .map(|route| RoutePattern::new(route.into()))
+            .collect();
+        let routes = routes?;
+        if routes.is_empty() {
+            return Ok(Self(RouteScopeKind::ExpandedEmpty));
+        }
+        Ok(Self(RouteScopeKind::Patterns(routes.into())))
     }
 
     fn allows(&self, route: &str) -> bool {
-        self.0.is_empty() || self.0.iter().any(|pattern| pattern.matches(route))
+        match &self.0 {
+            RouteScopeKind::Unrestricted => true,
+            RouteScopeKind::ExpandedEmpty => false,
+            RouteScopeKind::Patterns(patterns) => {
+                patterns.iter().any(|pattern| pattern.matches(route))
+            }
+        }
     }
 }
 
@@ -238,9 +284,6 @@ impl KeyPolicy {
         {
             return Err(PolicyConstructionError::UnsupportedModelSentinel);
         }
-        // Python parity: an empty member allowed_models list adds no restriction (auth_checks.py:7108-7151, 2026-10-25).
-        let member_models =
-            member_models.filter(|models| !matches!(&models.0, ModelScopeKind::ExpandedEmpty));
         Ok(Self {
             key_models,
             team,
@@ -293,7 +336,13 @@ impl KeyPolicy {
                 } else {
                     self.key_models.clone()
                 };
-                if !key_models.allows(name) {
+                // Python parity: resolved team aliases participate in key model access checks (auth_checks.py:4970-4984, 2026-10-25).
+                let allows_team_alias = !matches!(self.key_models.0, ModelScopeKind::ExpandedEmpty)
+                    && self
+                        .team
+                        .as_ref()
+                        .is_some_and(|team| team.allows_alias(name));
+                if !key_models.allows(name) && !allows_team_alias {
                     return Err(Denial::KeyModelDenied);
                 }
                 if let Some(team) = &self.team
@@ -492,6 +541,82 @@ mod tests {
     }
 
     #[rstest]
+    fn restricted_key_accepts_team_alias_without_bypassing_member_scope(now: SystemTime) {
+        let team = TeamPolicy::new(ModelScope::patterns(["team-*"]).expect("valid team scope"))
+            .expect("valid team")
+            .with_aliases(["team-alias"]);
+        let policy = KeyPolicy::new(
+            ModelScope::patterns(["key-*"]).expect("valid key scope"),
+            Some(team.clone()),
+            None,
+            None,
+            false,
+            None,
+            RouteScope::unrestricted(),
+        )
+        .expect("valid policy");
+        assert_eq!(policy.check(&model_request("team-alias"), now), Ok(()));
+        assert_eq!(
+            policy.check(&model_request("unknown-alias"), now),
+            Err(Denial::KeyModelDenied)
+        );
+
+        let restricted = KeyPolicy::new(
+            ModelScope::patterns(["key-*"]).expect("valid key scope"),
+            Some(team),
+            None,
+            Some(ModelScope::expanded(["member-*"]).expect("member scope")),
+            false,
+            None,
+            RouteScope::unrestricted(),
+        )
+        .expect("valid policy");
+        assert_eq!(
+            restricted.check(&model_request("team-alias"), now),
+            Err(Denial::MemberModelDenied)
+        );
+    }
+
+    #[rstest]
+    fn all_team_models_inherits_team_aliases(now: SystemTime) {
+        let team = TeamPolicy::new(ModelScope::patterns(["team-*"]).expect("valid team scope"))
+            .expect("valid team")
+            .with_aliases(["team-alias"]);
+        let policy = KeyPolicy::new(
+            ModelScope::patterns(["all-team-models"]).expect("valid sentinel"),
+            Some(team),
+            None,
+            None,
+            false,
+            None,
+            RouteScope::unrestricted(),
+        )
+        .expect("valid policy");
+        assert_eq!(policy.check(&model_request("team-alias"), now), Ok(()));
+    }
+
+    #[rstest]
+    fn expanded_empty_key_scope_rejects_team_alias(now: SystemTime) {
+        let team = TeamPolicy::new(ModelScope::patterns(["team-*"]).expect("valid team scope"))
+            .expect("valid team")
+            .with_aliases(["team-alias"]);
+        let policy = KeyPolicy::new(
+            ModelScope::expanded(Vec::<&str>::new()).expect("empty expansion"),
+            Some(team),
+            None,
+            None,
+            false,
+            None,
+            RouteScope::unrestricted(),
+        )
+        .expect("valid policy");
+        assert_eq!(
+            policy.check(&model_request("team-alias"), now),
+            Err(Denial::KeyModelDenied)
+        );
+    }
+
+    #[rstest]
     fn user_scope_intersects_key(now: SystemTime) {
         let policy = KeyPolicy::new(
             ModelScope::unrestricted(),
@@ -546,7 +671,7 @@ mod tests {
     }
 
     #[rstest]
-    fn expanded_empty_member_scope_does_not_restrict(now: SystemTime) {
+    fn expanded_empty_member_scope_denies(now: SystemTime) {
         let policy = KeyPolicy::new(
             ModelScope::unrestricted(),
             None,
@@ -557,7 +682,10 @@ mod tests {
             RouteScope::unrestricted(),
         )
         .expect("valid policy");
-        assert_eq!(policy.check(&model_request("gpt-4o"), now), Ok(()));
+        assert_eq!(
+            policy.check(&model_request("gpt-4o"), now),
+            Err(Denial::MemberModelDenied)
+        );
     }
 
     #[rstest]
@@ -575,6 +703,42 @@ mod tests {
         assert_eq!(
             policy.check(&model_request("gpt-4o"), now),
             Err(Denial::KeyModelDenied)
+        );
+    }
+
+    #[rstest]
+    #[case::configured_empty(
+        RouteScope::allowed(Vec::<&str>::new()).expect("empty configured routes"),
+        Ok(())
+    )]
+    #[case::expanded_empty(
+        RouteScope::expanded(Vec::<&str>::new()).expect("empty expanded routes"),
+        Err(Denial::RouteDenied)
+    )]
+    fn empty_route_scopes_preserve_resolution_semantics(
+        #[case] routes: RouteScope,
+        #[case] expected: Result<(), Denial>,
+        now: SystemTime,
+    ) {
+        let policy = KeyPolicy::new(
+            ModelScope::unrestricted(),
+            None,
+            None,
+            None,
+            false,
+            None,
+            routes,
+        )
+        .expect("valid policy");
+        assert_eq!(
+            policy.check(
+                &AccessRequest::Route {
+                    method: "POST".to_owned(),
+                    path: "/v1/chat/completions".to_owned()
+                },
+                now
+            ),
+            expected
         );
     }
 
@@ -715,6 +879,10 @@ mod tests {
         ));
         assert!(matches!(
             RouteScope::allowed(["/v1/ch*t"]),
+            Err(PolicyConstructionError::UnsupportedRoutePattern(_))
+        ));
+        assert!(matches!(
+            RouteScope::allowed(["chat-completions"]),
             Err(PolicyConstructionError::UnsupportedRoutePattern(_))
         ));
         assert!(matches!(
