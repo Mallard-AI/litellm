@@ -215,9 +215,12 @@ mod tests {
 
     use super::*;
 
+    type StoreResult = Result<Option<KeyRecord>, StoreError>;
+    type StoreResults = Arc<Mutex<VecDeque<StoreResult>>>;
+
     #[derive(Clone, Default)]
     struct FakeStore {
-        records: Arc<Mutex<VecDeque<Result<Option<KeyRecord>, StoreError>>>>,
+        records: StoreResults,
     }
 
     impl FakeStore {
