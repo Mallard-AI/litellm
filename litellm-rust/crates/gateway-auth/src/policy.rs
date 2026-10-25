@@ -2,8 +2,8 @@ use std::{sync::Arc, time::SystemTime};
 
 use fancy_regex::Regex;
 
-pub use crate::error::{Denial, PolicyConstructionError};
 use crate::AccessRequest;
+pub use crate::error::{Denial, PolicyConstructionError};
 
 const ALL_PROXY_MODELS: &str = "all-proxy-models";
 const ALL_TEAM_MODELS: &str = "all-team-models";
