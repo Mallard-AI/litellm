@@ -4,6 +4,7 @@ mod error;
 mod http;
 mod identity;
 pub mod keys;
+pub mod policy;
 mod ui;
 
 use sha2::{Digest, Sha256};
@@ -21,6 +22,9 @@ pub use http::{Bearer, CredentialExtractor, RequireMasterKey, authenticate};
 pub use identity::{
     AuthenticatedCaller, Authentication, AuthenticationMethod, Principal, PrincipalKind,
     ResolvedIdentity, SharedCaller, VerifiedIdentity,
+};
+pub use policy::{
+    Denial, KeyPolicy, ModelScope, PolicyConstructionError, RouteScope, TeamPolicy,
 };
 pub use ui::{UI_CSRF_KEY, UiAuthSession, UiBackend, UiCredentials, UiSession, UiUser};
 
