@@ -1,9 +1,11 @@
 use std::{sync::Arc, time::SystemTime};
 
 use fancy_regex::Regex;
-use thiserror::Error;
 
-use crate::AccessRequest;
+use crate::{
+    error::{Denial, PolicyConstructionError},
+    AccessRequest,
+};
 
 const ALL_PROXY_MODELS: &str = "all-proxy-models";
 const ALL_TEAM_MODELS: &str = "all-team-models";
@@ -19,7 +21,6 @@ impl ModelPattern {
         if !pattern.contains('*') {
             return Ok(Self::Exact(pattern));
         }
-        // Python parity: model wildcards are regexes after replacing "*" with ".*" (auth_checks.py:7730-7747, 2026-10-25).
         let expression = format!("^{}$", pattern.replace('*', ".*"));
         let regex = Regex::new(&expression).map_err(|source| {
             PolicyConstructionError::InvalidModelPattern {
@@ -63,7 +64,6 @@ impl ModelScope {
         if patterns.is_empty() {
             return Ok(Self::unrestricted());
         }
-        // Python parity: key sentinels expand to proxy or team models (model_checks.py:120-143, auth_checks.py:5193-5207, 2026-10-25).
         let has_all_team_models = patterns.iter().any(|pattern| pattern == ALL_TEAM_MODELS);
         let has_all_proxy_models = patterns.iter().any(|pattern| pattern == ALL_PROXY_MODELS);
         let patterns: Result<Vec<ModelPattern>, PolicyConstructionError> =
@@ -184,7 +184,6 @@ impl RoutePattern {
         if pattern.contains('*') {
             return Err(PolicyConstructionError::UnsupportedRoutePattern(pattern));
         }
-        // Python parity: literal routes match exactly or at a slash boundary (route_checks.py:647-674, 2026-10-25).
         Ok(Self::Literal(pattern))
     }
 
@@ -369,38 +368,6 @@ impl KeyPolicy {
             AccessRequest::Mcp { .. } | AccessRequest::Ui(_) => Err(Denial::UnsupportedRequest),
         }
     }
-}
-
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum PolicyConstructionError {
-    #[error("invalid model pattern {pattern}: {detail}")]
-    InvalidModelPattern { pattern: String, detail: String },
-    #[error("unsupported route pattern {0}")]
-    UnsupportedRoutePattern(String),
-    #[error("unsupported model sentinel in an expanded grant")]
-    UnsupportedModelSentinel,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Error)]
-pub enum Denial {
-    #[error("key policy expired")]
-    Expired,
-    #[error("key is blocked")]
-    KeyBlocked,
-    #[error("team is blocked")]
-    TeamBlocked,
-    #[error("key model access denied")]
-    KeyModelDenied,
-    #[error("team model access denied")]
-    TeamModelDenied,
-    #[error("user model access denied")]
-    UserModelDenied,
-    #[error("team member model access denied")]
-    MemberModelDenied,
-    #[error("route access denied")]
-    RouteDenied,
-    #[error("request type is unsupported")]
-    UnsupportedRequest,
 }
 
 #[cfg(test)]

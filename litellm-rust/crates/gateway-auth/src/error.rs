@@ -13,6 +13,38 @@ pub enum KeyError {
     Lookup(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
+#[derive(Clone, Debug, thiserror::Error, Eq, PartialEq)]
+pub enum PolicyConstructionError {
+    #[error("invalid model pattern {pattern}: {detail}")]
+    InvalidModelPattern { pattern: String, detail: String },
+    #[error("unsupported route pattern {0}")]
+    UnsupportedRoutePattern(String),
+    #[error("unsupported model sentinel in an expanded grant")]
+    UnsupportedModelSentinel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error, strum::VariantArray)]
+pub enum Denial {
+    #[error("key policy expired")]
+    Expired,
+    #[error("key is blocked")]
+    KeyBlocked,
+    #[error("team is blocked")]
+    TeamBlocked,
+    #[error("key model access denied")]
+    KeyModelDenied,
+    #[error("team model access denied")]
+    TeamModelDenied,
+    #[error("user model access denied")]
+    UserModelDenied,
+    #[error("team member model access denied")]
+    MemberModelDenied,
+    #[error("route access denied")]
+    RouteDenied,
+    #[error("request type is unsupported")]
+    UnsupportedRequest,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("operation is not permitted")]
