@@ -1859,6 +1859,7 @@ dependencies = [
  "ed25519",
  "serde",
  "sha2 0.10.9",
+ "strum",
  "subtle",
  "zeroize",
 ]
