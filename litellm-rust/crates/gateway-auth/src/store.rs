@@ -379,6 +379,42 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn cached_moka_expiration_refetches_store(hash: KeyHash) {
+        let store = FakeStore::default();
+        store
+            .push(Ok(Some(KeyRecord::Unsupported(Arc::from([
+                "before".to_owned()
+            ])))))
+            .await;
+        store
+            .push(Ok(Some(KeyRecord::Unsupported(Arc::from([
+                "after".to_owned()
+            ])))))
+            .await;
+        let cache = MokaKeyCache::new(4, Duration::from_millis(20));
+        let cached = Cached::new(store, cache);
+
+        let first = cached.find(&hash).await.expect("first lookup");
+        match first {
+            Some(KeyRecord::Unsupported(fields)) => {
+                assert_eq!(fields.as_ref(), &["before".to_owned()]);
+            }
+            _ => panic!("first lookup returned an unexpected record"),
+        }
+
+        tokio::time::sleep(Duration::from_millis(40)).await;
+
+        let second = cached.find(&hash).await.expect("second lookup");
+        match second {
+            Some(KeyRecord::Unsupported(fields)) => {
+                assert_eq!(fields.as_ref(), &["after".to_owned()]);
+            }
+            _ => panic!("second lookup returned an unexpected record"),
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn invalidation_during_load_does_not_refill(hash: KeyHash, policy: KeyPolicy) {
         let started = Arc::new(Notify::new());
         let resume = Arc::new(Notify::new());
