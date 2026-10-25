@@ -52,7 +52,7 @@ fn standard_credential(parts: &Parts) -> Result<String, Error> {
     if let Some(value) = standard_header(parts, "ocp-apim-subscription-key")? {
         return raw_credential(value);
     }
-    Ok(query_credential(parts).ok_or(Error::InvalidToken)?)
+    query_credential(parts).ok_or(Error::InvalidToken)
 }
 
 fn standard_header<'a>(parts: &'a Parts, name: &'static str) -> Result<Option<&'a str>, Error> {
