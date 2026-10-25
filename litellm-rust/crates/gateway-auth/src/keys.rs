@@ -2,6 +2,7 @@ use std::{future::Future, pin::Pin, str::FromStr, time::SystemTime};
 
 use litellm_auth_types::SecretValue;
 
+pub use crate::error::KeyHashError;
 use crate::{KeyError, hash_token};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -20,10 +21,6 @@ impl KeyHash {
         Self::from_str(digest)
     }
 }
-
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("key digest must be 64 lowercase hexadecimal characters")]
-pub struct KeyHashError;
 
 impl FromStr for KeyHash {
     type Err = KeyHashError;
