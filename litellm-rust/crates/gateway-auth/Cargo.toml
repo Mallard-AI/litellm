@@ -20,6 +20,7 @@ thiserror.workspace = true
 serde.workspace = true
 tower-sessions.workspace = true
 tokio.workspace = true
+url.workspace = true
 veil.workspace = true
 
 [dev-dependencies]

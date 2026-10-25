@@ -1,6 +1,7 @@
 mod authentication;
 mod authorization;
 mod error;
+pub mod extract;
 mod http;
 mod identity;
 pub mod keys;
@@ -19,6 +20,7 @@ pub use authorization::{
     NoAdditionalPolicy, Permissions, UiAction,
 };
 pub use error::{Error, KeyError, UiAuthError};
+pub use extract::PythonHeaders;
 pub use http::{Bearer, CredentialExtractor, RequireMasterKey, authenticate};
 pub use identity::{
     AuthenticatedCaller, Authentication, AuthenticationMethod, Principal, PrincipalKind,
