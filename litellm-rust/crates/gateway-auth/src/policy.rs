@@ -19,6 +19,7 @@ impl ModelPattern {
         if !pattern.contains('*') {
             return Ok(Self::Exact(pattern));
         }
+        // Python parity: model wildcards are regexes after replacing "*" with ".*" (auth_checks.py:7730-7747, 2026-10-25).
         let expression = format!("^{}$", pattern.replace('*', ".*"));
         let regex = Regex::new(&expression).map_err(|source| {
             PolicyConstructionError::InvalidModelPattern {
@@ -62,6 +63,7 @@ impl ModelScope {
         if patterns.is_empty() {
             return Ok(Self::unrestricted());
         }
+        // Python parity: key sentinels expand to proxy or team models (model_checks.py:120-143, auth_checks.py:5193-5207, 2026-10-25).
         let has_all_team_models = patterns.iter().any(|pattern| pattern == ALL_TEAM_MODELS);
         let has_all_proxy_models = patterns.iter().any(|pattern| pattern == ALL_PROXY_MODELS);
         let patterns: Result<Vec<ModelPattern>, PolicyConstructionError> =
@@ -136,6 +138,7 @@ impl TeamPolicy {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
+        // Python parity: a team alias is granted only when present in the resolved alias map (auth_checks.py:5167-5191, 2026-10-25).
         self.aliases = aliases
             .into_iter()
             .map(Into::into)
@@ -156,8 +159,8 @@ impl TeamPolicy {
 
 #[derive(Clone, Debug)]
 enum RoutePattern {
-    Prefix(String),
-    Regex(Regex),
+    Literal(String),
+    WildcardPrefix(String),
 }
 
 impl RoutePattern {
@@ -166,24 +169,19 @@ impl RoutePattern {
             return Err(PolicyConstructionError::UnsupportedRoutePattern(pattern));
         }
         if let Some(prefix) = pattern.strip_suffix('*') {
-            return Ok(Self::Prefix(prefix.to_owned()));
+            return Ok(Self::WildcardPrefix(prefix.to_owned()));
         }
         if pattern.contains('*') {
-            let expression = format!("^{}$", pattern.replace('*', ".*"));
-            return Regex::new(&expression).map(Self::Regex).map_err(|source| {
-                PolicyConstructionError::InvalidRoutePattern {
-                    pattern,
-                    detail: source.to_string(),
-                }
-            });
+            return Err(PolicyConstructionError::UnsupportedRoutePattern(pattern));
         }
-        Ok(Self::Prefix(pattern))
+        // Python parity: literal routes match exactly or at a slash boundary (route_checks.py:647-674, 2026-10-25).
+        Ok(Self::Literal(pattern))
     }
 
     fn matches(&self, route: &str) -> bool {
         match self {
-            Self::Prefix(prefix) => route == prefix || route.starts_with(&format!("{prefix}/")),
-            Self::Regex(regex) => regex.is_match(route).unwrap_or(false),
+            Self::Literal(path) => route == path || route.starts_with(&format!("{path}/")),
+            Self::WildcardPrefix(prefix) => route.starts_with(prefix),
         }
     }
 }
@@ -240,6 +238,9 @@ impl KeyPolicy {
         {
             return Err(PolicyConstructionError::UnsupportedModelSentinel);
         }
+        // Python parity: an empty member allowed_models list adds no restriction (auth_checks.py:7108-7151, 2026-10-25).
+        let member_models =
+            member_models.filter(|models| !matches!(&models.0, ModelScopeKind::ExpandedEmpty));
         Ok(Self {
             key_models,
             team,
@@ -325,8 +326,6 @@ impl KeyPolicy {
 pub enum PolicyConstructionError {
     #[error("invalid model pattern {pattern}: {detail}")]
     InvalidModelPattern { pattern: String, detail: String },
-    #[error("invalid route pattern {pattern}: {detail}")]
-    InvalidRoutePattern { pattern: String, detail: String },
     #[error("unsupported route pattern {0}")]
     UnsupportedRoutePattern(String),
     #[error("unsupported model sentinel in an expanded grant")]
@@ -394,6 +393,21 @@ mod tests {
         .expect("valid policy");
 
         assert_eq!(policy.check(&model_request(name), now), Err(denial));
+    }
+
+    #[rstest]
+    fn model_pattern_uses_python_regex_semantics(now: SystemTime) {
+        let policy = KeyPolicy::new(
+            ModelScope::patterns(["gpt-4.o*"]).expect("valid regex pattern"),
+            None,
+            None,
+            None,
+            false,
+            None,
+            RouteScope::unrestricted(),
+        )
+        .expect("valid policy");
+        assert_eq!(policy.check(&model_request("gpt-4ao-fine"), now), Ok(()));
     }
 
     #[rstest]
@@ -476,6 +490,42 @@ mod tests {
     }
 
     #[rstest]
+    fn user_scope_intersects_key(now: SystemTime) {
+        let policy = KeyPolicy::new(
+            ModelScope::unrestricted(),
+            None,
+            Some(ModelScope::expanded(["gpt-4o"]).expect("user scope")),
+            None,
+            false,
+            None,
+            RouteScope::unrestricted(),
+        )
+        .expect("valid policy");
+        assert_eq!(
+            policy.check(&model_request("claude-3"), now),
+            Err(Denial::UserModelDenied)
+        );
+    }
+
+    #[rstest]
+    fn non_empty_member_scope_intersects_key(now: SystemTime) {
+        let policy = KeyPolicy::new(
+            ModelScope::unrestricted(),
+            None,
+            None,
+            Some(ModelScope::expanded(["gpt-4o"]).expect("member scope")),
+            false,
+            None,
+            RouteScope::unrestricted(),
+        )
+        .expect("valid policy");
+        assert_eq!(
+            policy.check(&model_request("claude-3"), now),
+            Err(Denial::MemberModelDenied)
+        );
+    }
+
+    #[rstest]
     fn empty_member_scope_does_not_restrict(now: SystemTime) {
         let team = TeamPolicy::new(ModelScope::patterns(["gpt-*"]).expect("valid team scope"))
             .expect("valid team");
@@ -494,7 +544,7 @@ mod tests {
     }
 
     #[rstest]
-    fn expanded_empty_member_scope_denies(now: SystemTime) {
+    fn expanded_empty_member_scope_does_not_restrict(now: SystemTime) {
         let policy = KeyPolicy::new(
             ModelScope::unrestricted(),
             None,
@@ -505,9 +555,24 @@ mod tests {
             RouteScope::unrestricted(),
         )
         .expect("valid policy");
+        assert_eq!(policy.check(&model_request("gpt-4o"), now), Ok(()));
+    }
+
+    #[rstest]
+    fn expanded_empty_key_scope_denies(now: SystemTime) {
+        let policy = KeyPolicy::new(
+            ModelScope::expanded(Vec::<&str>::new()).expect("empty expansion"),
+            None,
+            None,
+            None,
+            false,
+            None,
+            RouteScope::unrestricted(),
+        )
+        .expect("valid policy");
         assert_eq!(
             policy.check(&model_request("gpt-4o"), now),
-            Err(Denial::MemberModelDenied)
+            Err(Denial::KeyModelDenied)
         );
     }
 
@@ -546,6 +611,30 @@ mod tests {
     }
 
     #[rstest]
+    fn wildcard_route_matches_python_prefix(now: SystemTime) {
+        let policy = KeyPolicy::new(
+            ModelScope::unrestricted(),
+            None,
+            None,
+            None,
+            false,
+            None,
+            RouteScope::allowed(["/v1/chat*"]).expect("valid route"),
+        )
+        .expect("valid policy");
+        assert_eq!(
+            policy.check(
+                &AccessRequest::Route {
+                    method: "POST".to_owned(),
+                    path: "/v1/chatter".to_owned()
+                },
+                now
+            ),
+            Ok(())
+        );
+    }
+
+    #[rstest]
     fn blocked_expired_and_unsupported_fail_closed(now: SystemTime) {
         let blocked = KeyPolicy::new(
             ModelScope::unrestricted(),
@@ -560,6 +649,24 @@ mod tests {
         assert_eq!(
             blocked.check(&model_request("gpt-4o"), now),
             Err(Denial::KeyBlocked)
+        );
+
+        let blocked_team = TeamPolicy::new(ModelScope::unrestricted())
+            .expect("valid team")
+            .blocked(true);
+        let team_blocked_policy = KeyPolicy::new(
+            ModelScope::unrestricted(),
+            Some(blocked_team),
+            None,
+            None,
+            false,
+            None,
+            RouteScope::unrestricted(),
+        )
+        .expect("valid policy");
+        assert_eq!(
+            team_blocked_policy.check(&model_request("gpt-4o"), now),
+            Err(Denial::TeamBlocked)
         );
 
         let expired = KeyPolicy::new(
@@ -602,6 +709,10 @@ mod tests {
         ));
         assert!(matches!(
             RouteScope::allowed(["/threads/{id}"]),
+            Err(PolicyConstructionError::UnsupportedRoutePattern(_))
+        ));
+        assert!(matches!(
+            RouteScope::allowed(["/v1/ch*t"]),
             Err(PolicyConstructionError::UnsupportedRoutePattern(_))
         ));
         assert!(matches!(
