@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin, time::SystemTime};
+use std::{future::Future, pin::Pin, str::FromStr, time::SystemTime};
 
 use litellm_auth_types::SecretValue;
 
@@ -14,6 +14,30 @@ impl KeyHash {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub fn from_digest(digest: &str) -> Result<Self, KeyHashError> {
+        Self::from_str(digest)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("key digest must be 64 lowercase hexadecimal characters")]
+pub struct KeyHashError;
+
+impl FromStr for KeyHash {
+    type Err = KeyHashError;
+
+    fn from_str(digest: &str) -> Result<Self, Self::Err> {
+        if digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            Ok(Self(digest.to_owned()))
+        } else {
+            Err(KeyHashError)
+        }
     }
 }
 
@@ -44,5 +68,20 @@ pub async fn verify_key(
             Ok(hash)
         }
         Some(KeyStatus::Revoked) | None => Err(KeyError::Invalid),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::{KeyHash, KeyHashError};
+
+    #[rstest]
+    #[case::short("abc")]
+    #[case::uppercase("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    #[case::non_hex("gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg")]
+    fn digest_requires_64_lowercase_hex(#[case] digest: &str) {
+        assert_eq!(KeyHash::from_digest(digest), Err(KeyHashError));
     }
 }

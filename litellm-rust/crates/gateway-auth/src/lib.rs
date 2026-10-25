@@ -5,6 +5,7 @@ mod http;
 mod identity;
 pub mod keys;
 pub mod policy;
+pub mod store;
 mod ui;
 
 use sha2::{Digest, Sha256};
@@ -23,8 +24,11 @@ pub use identity::{
     AuthenticatedCaller, Authentication, AuthenticationMethod, Principal, PrincipalKind,
     ResolvedIdentity, SharedCaller, VerifiedIdentity,
 };
-pub use policy::{
-    Denial, KeyPolicy, ModelScope, PolicyConstructionError, RouteScope, TeamPolicy,
+pub use keys::{KeyHash, KeyHashError};
+pub use policy::{Denial, KeyPolicy, ModelScope, PolicyConstructionError, RouteScope, TeamPolicy};
+pub use store::{
+    Cached, Invalidation, InvalidationError, KeyCache, KeyRecord, KeyStore, MokaKeyCache,
+    StoreError, StoreFuture, decode_invalidation,
 };
 pub use ui::{UI_CSRF_KEY, UiAuthSession, UiBackend, UiCredentials, UiSession, UiUser};
 
