@@ -2,9 +2,9 @@ use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use moka::future::Cache;
 use serde_json::Value;
-use thiserror::Error;
 use tokio::sync::Mutex;
 
+pub use crate::error::{InvalidationError, StoreError};
 use crate::{KeyHash, KeyPolicy};
 
 pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send + 'a>>;
@@ -13,30 +13,6 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>>
 pub enum KeyRecord {
     Policy(KeyPolicy),
     Unsupported(Arc<[String]>),
-}
-
-#[derive(Debug, Error)]
-pub enum StoreError {
-    #[error("key store backend failed: {0}")]
-    Backend(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("key cache failed: {0}")]
-    Cache(#[source] Box<dyn std::error::Error + Send + Sync>),
-}
-
-impl StoreError {
-    pub fn backend<E>(error: E) -> Self
-    where
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        Self::Backend(Box::new(error))
-    }
-
-    pub fn cache<E>(error: E) -> Self
-    where
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        Self::Cache(Box::new(error))
-    }
 }
 
 pub trait KeyStore: Send + Sync {
@@ -172,16 +148,6 @@ where
 pub enum Invalidation {
     Key(KeyHash),
     All,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Error)]
-pub enum InvalidationError {
-    #[error("invalidation JSON must be an object")]
-    NotObject,
-    #[error("invalidation JSON is malformed: {0}")]
-    Malformed(String),
-    #[error("invalidation cache_key must be a non-empty string")]
-    InvalidCacheKey,
 }
 
 pub fn decode_invalidation(input: &[u8]) -> Result<Invalidation, InvalidationError> {

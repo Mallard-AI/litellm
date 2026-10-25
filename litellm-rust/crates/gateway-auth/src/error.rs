@@ -46,6 +46,44 @@ pub enum Denial {
 }
 
 #[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error("key store backend failed: {0}")]
+    Backend(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("key cache failed: {0}")]
+    Cache(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl StoreError {
+    pub fn backend<E>(error: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self::Backend(Box::new(error))
+    }
+
+    pub fn cache<E>(error: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self::Cache(Box::new(error))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum InvalidationError {
+    #[error("invalidation JSON must be an object")]
+    NotObject,
+    #[error("invalidation JSON is malformed: {0}")]
+    Malformed(String),
+    #[error("invalidation cache_key must be a non-empty string")]
+    InvalidCacheKey,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("key digest must be 64 lowercase hexadecimal characters")]
+pub struct KeyHashError;
+
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("operation is not permitted")]
     Forbidden,
